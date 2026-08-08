@@ -81,7 +81,17 @@ func (r *playlistRepository) userFilter() Sqlizer {
 	return Or{
 		Eq{"public": true},
 		Eq{"owner_id": user.ID},
+		Expr("EXISTS (SELECT 1 FROM playlist_user pu "+
+			"WHERE pu.playlist_id = playlist.id AND pu.user_id = ?)", user.ID),
 	}
+}
+
+func (r *playlistRepository) writableFilter() Sqlizer {
+	user := loggedUser(r.ctx)
+	if user.IsAdmin {
+		return And{}
+	}
+	return Eq{"owner_id": user.ID}
 }
 
 func (r *playlistRepository) CountAll(options ...model.QueryOptions) (int64, error) {
@@ -94,7 +104,7 @@ func (r *playlistRepository) Exists(id string) (bool, error) {
 }
 
 func (r *playlistRepository) Delete(id string) error {
-	return r.delete(And{Eq{"id": id}, r.userFilter()})
+	return r.delete(And{Eq{"id": id}, r.writableFilter()})
 }
 
 func (r *playlistRepository) Put(p *model.Playlist, cols ...string) error {
@@ -408,6 +418,35 @@ func (r *playlistRepository) renumber(id string) error {
 		return err
 	}
 	return r.refreshCounters(&model.Playlist{ID: id})
+}
+
+func (r *playlistRepository) GetVisibleUsers(playlistID string) (model.Users, error) {
+	sel := Select("u.*").
+		From("user u").
+		Join("playlist_user pu ON u.id = pu.user_id").
+		Where(Eq{"pu.playlist_id": playlistID}).
+		OrderBy("u.name")
+
+	var res model.Users
+	err := r.queryAll(sel, &res)
+	return res, err
+}
+
+func (r *playlistRepository) SetVisibleUsers(playlistID string, userIDs []string) error {
+	delSql := Delete("playlist_user").Where(Eq{"playlist_id": playlistID})
+	if _, err := r.executeSQL(delSql); err != nil {
+		return err
+	}
+
+	if len(userIDs) > 0 {
+		insert := Insert("playlist_user").Columns("playlist_id", "user_id")
+		for _, userID := range userIDs {
+			insert = insert.Values(playlistID, userID)
+		}
+		_, err := r.executeSQL(insert)
+		return err
+	}
+	return nil
 }
 
 var _ model.PlaylistRepository = (*playlistRepository)(nil)

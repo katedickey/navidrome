@@ -131,6 +131,11 @@ type PlaylistRepository interface {
 	Delete(id string) error
 	Tracks(playlistId string, refreshSmartPlaylist bool) PlaylistTrackRepository
 	GetPlaylists(mediaFileId string) (Playlists, error)
+
+	// GetVisibleUsers returns the users the playlist has been made visible to, beyond
+	// its owner. SetVisibleUsers replaces that set wholesale.
+	GetVisibleUsers(playlistID string) (Users, error)
+	SetVisibleUsers(playlistID string, userIDs []string) error
 }
 
 type PlaylistTrack struct {

@@ -27,6 +27,7 @@ type phasePlaylists struct {
 	cw            artwork.CacheWarmer
 	refreshed     atomic.Uint32
 	pendingImport bool
+	visibleTo     map[int][]string // library ID -> users who can see playlists imported from it
 }
 
 func createPhasePlaylists(ctx context.Context, scanState *scanState, ds model.DataStore, pls playlists.Playlists, cw artwork.CacheWarmer) *phasePlaylists {
@@ -65,6 +66,12 @@ func (p *phasePlaylists) produce(put func(entry *model.Folder)) error {
 		return p.deferImport()
 	}
 	p.ctx = request.WithUser(p.ctx, *admin)
+
+	visibleTo, err := p.resolveLibraryVisibility()
+	if err != nil {
+		return fmt.Errorf("resolving playlist visibility: %w", err)
+	}
+	p.visibleTo = visibleTo
 
 	// When recovering a deferred import, scan all playlist folders, not just touched ones.
 	pending, err := p.importPending()
@@ -117,6 +124,33 @@ func (p *phasePlaylists) importPending() (bool, error) {
 	return v == "1", err
 }
 
+// resolveLibraryVisibility maps each library to the users who should be able to see
+// playlists imported from it. Admins are excluded: they already see every playlist,
+// so listing them is dead weight.
+func (p *phasePlaylists) resolveLibraryVisibility() (map[int][]string, error) {
+	if conf.Server.ImportedPlaylistVisibility != consts.ImportedPlaylistVisibilityLibrary {
+		return nil, nil
+	}
+	libRepo := p.ds.Library(p.ctx)
+	libs, err := libRepo.GetAll()
+	if err != nil {
+		return nil, err
+	}
+	visibleTo := make(map[int][]string, len(libs))
+	for _, lib := range libs {
+		users, err := libRepo.GetUsersWithLibraryAccess(lib.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, u := range users {
+			if !u.IsAdmin {
+				visibleTo[lib.ID] = append(visibleTo[lib.ID], u.ID)
+			}
+		}
+	}
+	return visibleTo, nil
+}
+
 func (p *phasePlaylists) stages() []ppl.Stage[*model.Folder] {
 	return []ppl.Stage[*model.Folder]{
 		ppl.NewStage(p.processPlaylistsInFolder, ppl.Name("process playlists in folder"), ppl.Concurrency(3)),
@@ -142,6 +176,11 @@ func (p *phasePlaylists) processPlaylistsInFolder(folder *model.Folder) (*model.
 		pls, err := p.pls.ImportFromFolder(p.ctx, folder, f.Name())
 		if err != nil {
 			continue
+		}
+		if pls.ID != "" && conf.Server.ImportedPlaylistVisibility == consts.ImportedPlaylistVisibilityLibrary {
+			if err := p.ds.Playlist(p.ctx).SetVisibleUsers(pls.ID, p.visibleTo[folder.LibraryID]); err != nil {
+				log.Warn(p.ctx, "Scanner: Could not set playlist visibility", "playlist", pls.Name, err)
+			}
 		}
 		if pls.IsSmartPlaylist() {
 			log.Debug("Scanner: Imported smart playlist", "name", pls.Name, "lastUpdated", pls.UpdatedAt, "path", pls.Path, "elapsed", time.Since(started))

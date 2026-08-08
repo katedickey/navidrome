@@ -176,6 +176,7 @@ func (s *playlists) updatePlaylist(ctx context.Context, newPls *model.Playlist, 
 	alreadyImportedAndNotSynced := err == nil && !pls.Sync && !forceSync
 	if alreadyImportedAndNotSynced {
 		log.Debug(ctx, "Playlist already imported and not synced", "playlist", pls.Name, "path", pls.Path)
+		newPls.ID = pls.ID
 		return nil
 	}
 

@@ -124,6 +124,14 @@ const (
 )
 
 const (
+	// ImportedPlaylistVisibilityOwner restricts auto-imported playlists to their owner.
+	ImportedPlaylistVisibilityOwner = "owner"
+	// ImportedPlaylistVisibilityLibrary also makes them visible to every user with
+	// access to the library the playlist was imported from.
+	ImportedPlaylistVisibilityLibrary = "library"
+)
+
+const (
 	//DefaultAlbumPID = "album_legacy"
 	DefaultAlbumPID = "musicbrainz_albumid|albumartistid,album,albumversion,releasedate"
 	DefaultTrackPID = "musicbrainz_trackid|albumid,discnumber,tracknumber,title"

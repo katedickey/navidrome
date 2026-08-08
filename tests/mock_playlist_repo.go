@@ -10,19 +10,21 @@ import (
 
 func CreateMockPlaylistRepo() *MockPlaylistRepo {
 	return &MockPlaylistRepo{
-		Data:    make(map[string]*model.Playlist),
-		PathMap: make(map[string]*model.Playlist),
+		Data:         make(map[string]*model.Playlist),
+		PathMap:      make(map[string]*model.Playlist),
+		VisibleUsers: make(map[string][]string),
 	}
 }
 
 type MockPlaylistRepo struct {
 	model.PlaylistRepository
-	Data       map[string]*model.Playlist // keyed by ID
-	PathMap    map[string]*model.Playlist // keyed by path
-	Last       *model.Playlist
-	Deleted    []string
-	Err        bool
-	TracksRepo model.PlaylistTrackRepository
+	Data         map[string]*model.Playlist // keyed by ID
+	PathMap      map[string]*model.Playlist // keyed by path
+	Last         *model.Playlist
+	Deleted      []string
+	Err          bool
+	TracksRepo   model.PlaylistTrackRepository
+	VisibleUsers map[string][]string // playlist ID -> visible user IDs
 }
 
 func (m *MockPlaylistRepo) SetError(err bool) {
@@ -106,6 +108,28 @@ func (m *MockPlaylistRepo) CountAll(_ ...model.QueryOptions) (int64, error) {
 		return 0, errors.New("error")
 	}
 	return int64(len(m.Data)), nil
+}
+
+func (m *MockPlaylistRepo) GetVisibleUsers(playlistID string) (model.Users, error) {
+	if m.Err {
+		return nil, errors.New("error")
+	}
+	users := make(model.Users, len(m.VisibleUsers[playlistID]))
+	for i, userID := range m.VisibleUsers[playlistID] {
+		users[i] = model.User{ID: userID}
+	}
+	return users, nil
+}
+
+func (m *MockPlaylistRepo) SetVisibleUsers(playlistID string, userIDs []string) error {
+	if m.Err {
+		return errors.New("error")
+	}
+	if m.VisibleUsers == nil {
+		m.VisibleUsers = make(map[string][]string)
+	}
+	m.VisibleUsers[playlistID] = userIDs
+	return nil
 }
 
 var _ model.PlaylistRepository = (*MockPlaylistRepo)(nil)

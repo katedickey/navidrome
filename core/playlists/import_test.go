@@ -302,9 +302,9 @@ var _ = Describe("Playlists - Import", func() {
 				plsFolder := &model.Folder{ID: "1", LibraryID: 1, LibraryPath: tmpDir, Path: "", Name: ""}
 				pls, err := ps.ImportFromFolder(ctx, plsFolder, "test.m3u")
 				Expect(err).ToNot(HaveOccurred())
-				// updatePlaylist skips the non-synced playlist, so the returned
-				// playlist has no ID (was never persisted/updated).
-				Expect(pls.ID).To(BeEmpty())
+				// The playlist is identified, but never written back.
+				Expect(pls.ID).To(Equal("existing-id"))
+				Expect(mockPlsRepo.Last).To(BeNil())
 			})
 
 			It("clears ExternalImageURL on re-scan when directive is removed", func() {

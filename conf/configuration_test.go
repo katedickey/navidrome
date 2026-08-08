@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/navidrome/navidrome/conf"
+	"github.com/navidrome/navidrome/consts"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/viper"
@@ -124,6 +125,23 @@ var _ = Describe("Configuration", func() {
 		Entry("multi-segment", "lastfm.enabled", "Lastfm.Enabled"),
 		Entry("empty string", "", ""),
 	)
+
+	Describe("ImportedPlaylistVisibility", func() {
+		It("defaults to owner", func() {
+			conf.InitConfig("", false)
+			conf.Load(true)
+
+			Expect(conf.Server.ImportedPlaylistVisibility).To(Equal(consts.ImportedPlaylistVisibilityOwner))
+		})
+
+		It("is settable via ND_IMPORTEDPLAYLISTVISIBILITY", func() {
+			GinkgoT().Setenv("ND_IMPORTEDPLAYLISTVISIBILITY", consts.ImportedPlaylistVisibilityLibrary)
+			conf.InitConfig("", true)
+			conf.Load(true)
+
+			Expect(conf.Server.ImportedPlaylistVisibility).To(Equal(consts.ImportedPlaylistVisibilityLibrary))
+		})
+	})
 
 	Describe("remapEnvVarKeysFromConfig", func() {
 		BeforeEach(func() {

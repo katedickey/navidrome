@@ -14,9 +14,10 @@ import (
 
 type MockLibraryRepo struct {
 	model.LibraryRepository
-	Data  map[int]model.Library
-	Err   error
-	PutFn func(*model.Library) error // Allow custom Put behavior for testing
+	Data       map[int]model.Library
+	Err        error
+	PutFn      func(*model.Library) error // Allow custom Put behavior for testing
+	UserAccess map[int]model.Users        // library ID -> users with access, for GetUsersWithLibraryAccess
 }
 
 func (m *MockLibraryRepo) SetData(data model.Libraries) {
@@ -160,8 +161,7 @@ func (m *MockLibraryRepo) GetUsersWithLibraryAccess(libraryID int) (model.Users,
 	if m.Err != nil {
 		return nil, m.Err
 	}
-	// Mock: return empty users for now
-	return model.Users{}, nil
+	return m.UserAccess[libraryID], nil
 }
 
 func (m *MockLibraryRepo) Count(options ...rest.QueryOptions) (int64, error) {

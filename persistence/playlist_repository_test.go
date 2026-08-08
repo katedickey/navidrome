@@ -194,4 +194,127 @@ var _ = Describe("PlaylistRepository", func() {
 			Expect(mediaFileIDs).To(Equal([]string{"1001", "1002"}))
 		})
 	})
+
+	Describe("Visibility", func() {
+		var privatePls model.Playlist
+		var regularRepo, thirdRepo model.PlaylistRepository
+
+		playlistIDs := func(list model.Playlists) []string {
+			ids := make([]string, len(list))
+			for i, p := range list {
+				ids[i] = p.ID
+			}
+			return ids
+		}
+
+		BeforeEach(func() {
+			regularCtx := log.NewContext(GinkgoT().Context())
+			regularCtx = request.WithUser(regularCtx, regularUser)
+			regularRepo = NewPlaylistRepository(regularCtx, GetDBXBuilder())
+
+			thirdCtx := log.NewContext(GinkgoT().Context())
+			thirdCtx = request.WithUser(thirdCtx, thirdUser)
+			thirdRepo = NewPlaylistRepository(thirdCtx, GetDBXBuilder())
+
+			privatePls = model.Playlist{Name: "Visibility Test", OwnerID: regularUser.ID, OwnerName: regularUser.UserName}
+			privatePls.AddMediaFilesByID([]string{songAntenna2.ID})
+			Expect(regularRepo.Put(&privatePls)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			Expect(repo.Delete(privatePls.ID)).To(Succeed())
+		})
+
+		It("hides the playlist from a user with no grant", func() {
+			_, err := thirdRepo.Get(privatePls.ID)
+			Expect(err).To(MatchError(model.ErrNotFound))
+			Expect(thirdRepo.CountAll()).To(Equal(int64(1))) // only the public plsBest
+			Expect(thirdRepo.Exists(privatePls.ID)).To(BeFalse())
+
+			pls, err := thirdRepo.GetPlaylists(songAntenna2.ID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pls).To(BeEmpty())
+
+			all, err := thirdRepo.GetAll()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(playlistIDs(all)).ToNot(ContainElement(privatePls.ID))
+		})
+
+		It("exposes the playlist to a user granted visibility", func() {
+			Expect(repo.SetVisibleUsers(privatePls.ID, []string{thirdUser.ID})).To(Succeed())
+
+			p, err := thirdRepo.Get(privatePls.ID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(p.ID).To(Equal(privatePls.ID))
+
+			Expect(thirdRepo.CountAll()).To(Equal(int64(2)))
+			Expect(thirdRepo.Exists(privatePls.ID)).To(BeTrue())
+
+			pls, err := thirdRepo.GetPlaylists(songAntenna2.ID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pls).To(HaveLen(1))
+			Expect(pls[0].ID).To(Equal(privatePls.ID))
+
+			all, err := thirdRepo.GetAll()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(playlistIDs(all)).To(ContainElement(privatePls.ID))
+		})
+
+		It("keeps admin visibility unaffected by visibility grants (regression)", func() {
+			p, err := repo.Get(privatePls.ID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(p.ID).To(Equal(privatePls.ID))
+		})
+
+		It("keeps owner visibility unaffected by visibility grants (regression)", func() {
+			p, err := regularRepo.Get(privatePls.ID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(p.ID).To(Equal(privatePls.ID))
+		})
+
+		It("replaces the visibility set instead of appending to it", func() {
+			Expect(repo.SetVisibleUsers(privatePls.ID, []string{thirdUser.ID})).To(Succeed())
+			Expect(repo.SetVisibleUsers(privatePls.ID, []string{adminUser.ID})).To(Succeed())
+
+			users, err := repo.GetVisibleUsers(privatePls.ID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(users).To(HaveLen(1))
+			Expect(users[0].ID).To(Equal(adminUser.ID))
+		})
+
+		It("clears the visibility set when given an empty slice", func() {
+			Expect(repo.SetVisibleUsers(privatePls.ID, []string{thirdUser.ID, adminUser.ID})).To(Succeed())
+			Expect(repo.SetVisibleUsers(privatePls.ID, nil)).To(Succeed())
+
+			users, err := repo.GetVisibleUsers(privatePls.ID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(users).To(BeEmpty())
+		})
+
+		It("round-trips the visibility set via GetVisibleUsers", func() {
+			Expect(repo.SetVisibleUsers(privatePls.ID, []string{thirdUser.ID, adminUser.ID})).To(Succeed())
+
+			users, err := repo.GetVisibleUsers(privatePls.ID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(users).To(HaveLen(2))
+			ids := []string{users[0].ID, users[1].ID}
+			Expect(ids).To(ConsistOf(thirdUser.ID, adminUser.ID))
+		})
+
+		It("does not let a user with only visibility delete the playlist", func() {
+			Expect(repo.SetVisibleUsers(privatePls.ID, []string{thirdUser.ID})).To(Succeed())
+			Expect(thirdRepo.Delete(privatePls.ID)).To(Succeed())
+			Expect(repo.Exists(privatePls.ID)).To(BeTrue())
+		})
+
+		It("lets the owner delete the playlist", func() {
+			Expect(regularRepo.Delete(privatePls.ID)).To(Succeed())
+			Expect(repo.Exists(privatePls.ID)).To(BeFalse())
+		})
+
+		It("lets an admin delete the playlist", func() {
+			Expect(repo.Delete(privatePls.ID)).To(Succeed())
+			Expect(repo.Exists(privatePls.ID)).To(BeFalse())
+		})
+	})
 })

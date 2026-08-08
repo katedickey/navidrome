@@ -32,6 +32,8 @@ var _ = Describe("phasePlaylists", func() {
 
 	var userRepo *tests.MockedUserRepo
 	var propRepo *tests.MockedPropertyRepo
+	var libRepo *tests.MockLibraryRepo
+	var plsRepo *tests.MockPlaylistRepo
 
 	BeforeEach(func() {
 		DeferCleanup(configtest.SetupConfig())
@@ -42,10 +44,14 @@ var _ = Describe("phasePlaylists", func() {
 		// An admin user exists by default, so playlist import proceeds.
 		Expect(userRepo.Put(&model.User{ID: "123", UserName: "admin", IsAdmin: true})).To(Succeed())
 		propRepo = &tests.MockedPropertyRepo{}
+		libRepo = &tests.MockLibraryRepo{}
+		plsRepo = tests.CreateMockPlaylistRepo()
 		ds = &tests.MockDataStore{
 			MockedFolder:   folderRepo,
 			MockedUser:     userRepo,
 			MockedProperty: propRepo,
+			MockedLibrary:  libRepo,
+			MockedPlaylist: plsRepo,
 		}
 		pls = &mockPlaylists{}
 		cw = artwork.NoopCacheWarmer()
@@ -145,6 +151,77 @@ var _ = Describe("phasePlaylists", func() {
 			Expect(produced).To(HaveLen(2))
 			Expect(phase.pendingImport).To(BeTrue())
 		})
+
+		Describe("library visibility", func() {
+			It("does not resolve visibility with the default owner setting", func() {
+				conf.Server.ImportedPlaylistVisibility = consts.ImportedPlaylistVisibilityOwner
+				libRepo.Err = errors.New("should not be called")
+
+				err := phase.produce(func(folder *model.Folder) {})
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(phase.visibleTo).To(BeNil())
+			})
+
+			It("does not resolve visibility for an unrecognized value", func() {
+				conf.Server.ImportedPlaylistVisibility = "bogus"
+				libRepo.Err = errors.New("should not be called")
+
+				err := phase.produce(func(folder *model.Folder) {})
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(phase.visibleTo).To(BeNil())
+			})
+
+			It("resolves visibility to non-admin users with library access, excluding admins", func() {
+				conf.Server.ImportedPlaylistVisibility = consts.ImportedPlaylistVisibilityLibrary
+				libRepo.SetData(model.Libraries{{ID: 1}, {ID: 2}})
+				libRepo.UserAccess = map[int]model.Users{
+					1: {
+						{ID: "u1", IsAdmin: false},
+						{ID: "admin-1", IsAdmin: true},
+					},
+					2: {
+						{ID: "admin-2", IsAdmin: true},
+					},
+				}
+
+				err := phase.produce(func(folder *model.Folder) {})
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(phase.visibleTo[1]).To(Equal([]string{"u1"}))
+				Expect(phase.visibleTo).ToNot(HaveKey(2))
+			})
+
+			It("returns an error and produces no folders when loading libraries fails", func() {
+				conf.Server.ImportedPlaylistVisibility = consts.ImportedPlaylistVisibilityLibrary
+				libRepo.Err = errors.New("db is locked")
+				folderRepo.SetData(map[*model.Folder]error{
+					{Path: "/path/to/folder1"}: nil,
+				})
+
+				called := false
+				err := phase.produce(func(folder *model.Folder) { called = true })
+
+				Expect(err).To(MatchError(ContainSubstring("resolving playlist visibility")))
+				Expect(called).To(BeFalse())
+			})
+
+			It("returns an error and produces no folders when loading library access fails", func() {
+				conf.Server.ImportedPlaylistVisibility = consts.ImportedPlaylistVisibilityLibrary
+				libRepo.SetData(model.Libraries{{ID: 1}})
+				ds.MockedLibrary = &erroringLibraryRepo{MockLibraryRepo: libRepo, errOnLibraryID: 1}
+				folderRepo.SetData(map[*model.Folder]error{
+					{Path: "/path/to/folder1"}: nil,
+				})
+
+				called := false
+				err := phase.produce(func(folder *model.Folder) { called = true })
+
+				Expect(err).To(MatchError(ContainSubstring("resolving playlist visibility")))
+				Expect(called).To(BeFalse())
+			})
+		})
 	})
 
 	Describe("finalize", func() {
@@ -209,8 +286,73 @@ var _ = Describe("phasePlaylists", func() {
 			Eventually(progress).Should(Receive(&info))
 			Expect(info.Warning).To(ContainSubstring("no such file or directory"))
 		})
+
+		It("sets playlist visibility to the users resolved for the folder's library", func() {
+			conf.Server.ImportedPlaylistVisibility = consts.ImportedPlaylistVisibilityLibrary
+			phase.visibleTo = map[int][]string{7: {"u1", "u2"}}
+
+			libPath := GinkgoT().TempDir()
+			folder := &model.Folder{LibraryID: 7, LibraryPath: libPath, Path: "path/to", Name: "folder"}
+			_ = os.MkdirAll(folder.AbsolutePath(), 0755)
+			_ = os.WriteFile(filepath.Join(folder.AbsolutePath(), "playlist1.m3u"), []byte{}, 0600)
+
+			pls.On("ImportFromFolder", mock.Anything, folder, "playlist1.m3u").
+				Return(&model.Playlist{ID: "pls-1", Name: "Playlist 1"}, nil)
+
+			_, err := phase.processPlaylistsInFolder(folder)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(plsRepo.VisibleUsers["pls-1"]).To(Equal([]string{"u1", "u2"}))
+		})
+
+		It("does not set playlist visibility with the default owner setting", func() {
+			phase.visibleTo = map[int][]string{7: {"u1", "u2"}}
+
+			libPath := GinkgoT().TempDir()
+			folder := &model.Folder{LibraryID: 7, LibraryPath: libPath, Path: "path/to", Name: "folder"}
+			_ = os.MkdirAll(folder.AbsolutePath(), 0755)
+			_ = os.WriteFile(filepath.Join(folder.AbsolutePath(), "playlist1.m3u"), []byte{}, 0600)
+
+			pls.On("ImportFromFolder", mock.Anything, folder, "playlist1.m3u").
+				Return(&model.Playlist{ID: "pls-1", Name: "Playlist 1"}, nil)
+
+			_, err := phase.processPlaylistsInFolder(folder)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(plsRepo.VisibleUsers).ToNot(HaveKey("pls-1"))
+		})
+
+		It("warns but does not fail the folder when setting playlist visibility errors", func() {
+			conf.Server.ImportedPlaylistVisibility = consts.ImportedPlaylistVisibilityLibrary
+			phase.visibleTo = map[int][]string{7: {"u1"}}
+			plsRepo.Err = true
+
+			libPath := GinkgoT().TempDir()
+			folder := &model.Folder{LibraryID: 7, LibraryPath: libPath, Path: "path/to", Name: "folder"}
+			_ = os.MkdirAll(folder.AbsolutePath(), 0755)
+			_ = os.WriteFile(filepath.Join(folder.AbsolutePath(), "playlist1.m3u"), []byte{}, 0600)
+
+			pls.On("ImportFromFolder", mock.Anything, folder, "playlist1.m3u").
+				Return(&model.Playlist{ID: "pls-1", Name: "Playlist 1"}, nil)
+
+			_, err := phase.processPlaylistsInFolder(folder)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(phase.refreshed.Load()).To(Equal(uint32(1)))
+		})
 	})
 })
+
+// erroringLibraryRepo lets a test fail GetUsersWithLibraryAccess for a specific
+// library while GetAll (and every other method) still delegates to the wrapped mock.
+type erroringLibraryRepo struct {
+	*tests.MockLibraryRepo
+	errOnLibraryID int
+}
+
+func (r *erroringLibraryRepo) GetUsersWithLibraryAccess(libraryID int) (model.Users, error) {
+	if libraryID == r.errOnLibraryID {
+		return nil, errors.New("db is locked")
+	}
+	return r.MockLibraryRepo.GetUsersWithLibraryAccess(libraryID)
+}
 
 type mockPlaylists struct {
 	mock.Mock

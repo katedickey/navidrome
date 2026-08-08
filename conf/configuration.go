@@ -57,6 +57,7 @@ type configOptions struct {
 	AlbumPlayCountMode              string
 	EnableArtworkPrecache           bool
 	AutoImportPlaylists             bool
+	ImportedPlaylistVisibility      string
 	DefaultPlaylistPublicVisibility bool
 	PlaylistsPath                   string
 	SmartPlaylistRefreshDelay       time.Duration
@@ -750,6 +751,7 @@ func setViperDefaults() {
 	viper.SetDefault("albumplaycountmode", consts.AlbumPlayCountModeAbsolute)
 	viper.SetDefault("enableartworkprecache", true)
 	viper.SetDefault("autoimportplaylists", true)
+	viper.SetDefault("importedplaylistvisibility", consts.ImportedPlaylistVisibilityOwner)
 	viper.SetDefault("defaultplaylistpublicvisibility", false)
 	viper.SetDefault("playlistspath", "")
 	viper.SetDefault("smartPlaylistRefreshDelay", 5*time.Second)
